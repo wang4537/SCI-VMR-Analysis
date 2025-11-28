@@ -1,4 +1,28 @@
 ######## FUNCTIONS ########
+#### Function: Read excel/csv Files Smartly #### 
+read_smart_file <- function(file_path)
+{
+  data <- tryCatch( #use "tryCatch" to handle warnings and errors 
+  {
+    #first, try with reading the input file as a true Excel file 
+    df_excel <- read_excel(file_path, col_names = FALSE)
+    #if the the data is long truncated with "\t" embedded
+    if (ncol(df_excel) == 1)
+      {
+      parsed_data <- read.table(text = df_excel[[1]], sep = "\t", header = TRUE) #re-read the data specifying the delimiter 
+      
+      return(parsed_data)
+      }
+    #second, read as a normal excel file 
+    return(read_excel(file_path))
+    
+  }, error = function(e) #if there is an error, the file is a .csv pretending to be .xlsx
+  {
+    #try reading it as csv
+    data <- read.csv(file_path, header = TRUE, sep = "\t", fileEncoding = "UTF-16LE")
+  })  
+  return(data)
+}
 #### Function: Split the conditions by the 96-well plate layout ####
 split_condition <- function(df) #df = the data frame of a data file
 {
@@ -16,13 +40,13 @@ split_condition <- function(df) #df = the data frame of a data file
 #### Function: Read and Preprocess Data ####
 prepare_data <- function(file_name) # file_name = the elements of the file name vector
 {
-  #read the file
-  test <- read.csv(file_name, header = TRUE, sep = "\t", fileEncoding = "UTF-16LE") #read the data file to a data frame
+  #read the data file to a data frame
+  test <- read_smart_file(file_name)
   #treatment names
   xls_name <- tail(strsplit(file_name, "/")[[1]], 1) #get only the EXCEL file name, remove parent directories
   treatment_names <- strsplit(xls_name, "-")[[1]][2:4] ##parse the condition segement in the file names 
   #parse the condition segement in the file names
-  treatment_date <- gsub(".xls", "", paste(strsplit(xls_name, "-")[[1]][5:7], collapse = "-")) #parse the date of the plate
+  treatment_date <- gsub(".xlsx?", "", paste(strsplit(xls_name, "-")[[1]][5:7], collapse = "-")) #parse the date of the plate
   #split the data by condition
   test_conSplit <- split_condition(test)
   #add the date column for each df in the list
@@ -38,6 +62,16 @@ prepare_data <- function(file_name) # file_name = the elements of the file name 
   #remove the empty conditions
   empty_idx <- which(treatment_names %in% grep("empty",treatment_names,ignore.case=TRUE,value=TRUE)) #get the index of empty conditions in the file names, case-insensitive
   test_conSplit[c(2*empty_idx-1, 2*empty_idx)] <- NULL #remove the elements of emtpy conditions
+  
+  #check duplicated groups
+  unique_group <- unique(names(test_conSplit))
+  test_conSplit <- lapply(unique_group, function(n)
+  {
+    #bind the small dataframes of the same group name
+    do.call(rbind, test_conSplit[names(test_conSplit) == n])
+  })
+  names(test_conSplit) <- unique_group #rename after binding
+  
   #rename the "aname" column
   for(i in 1:length(test_conSplit)) #loop through all elements in the list
   {
@@ -53,7 +87,7 @@ prepare_data <- function(file_name) # file_name = the elements of the file name 
   test_conSplit <- lapply(test_conSplit,
                           function(x)
                           {
-                            x$distance <- x$inadist + x$smldist + x$lardist
+                            x$distance <- as.numeric(x$inadist) + as.numeric(x$smldist) + as.numeric(x$lardist)
                             return (x)
                           }
   )
@@ -140,7 +174,6 @@ stat_tests <- function(x, remove_outlier = FALSE, out)
   return(list(x.ttest, x.anova, x.Tukey))
 }
 
-
 #### Function: Plot Bar Chart and  ####
 bar_box_plots <- function(x, remove_outlier = FALSE, out) #a function to wrap ggplot functions; x = input data frame, as one of the cumulative distance data frame
 {
@@ -158,7 +191,7 @@ bar_box_plots <- function(x, remove_outlier = FALSE, out) #a function to wrap gg
   
   ####### bar #######
   bar_input <- x[,c('date', 'aname', 'treatment','injury','MEAN', 'STDEV', 'STDERR', 'start', 'end')] #subset relevent columns for bar chart
-  bar_input <- aggregate(.~date+aname+treatment+injury+start+end, bar_input, unique) #get the group MEAN, STDEV and STDERR, use as input
+  bar_input <- aggregate(cbind(MEAN, STDEV, STDERR)~date+aname+treatment+injury+start+end, bar_input, unique) #get the group MEAN, STDEV and STDERR, use as input
   
   bar_title <- paste("Time Period: (", bar_input$start, " s - ", bar_input$end, " s)", sep = "") #specify the title for the barchart
   
@@ -230,6 +263,7 @@ bar_box_plots <- function(x, remove_outlier = FALSE, out) #a function to wrap gg
 library(rstatix) #hypothesis testing
 library(plotrix) #standard error
 library(ggplot2) #plotting
+library(readxl) #read excel file (for special cases)
 #library(ggpubr) #add p-values and sig level on plots
 
 #time point for analysis
