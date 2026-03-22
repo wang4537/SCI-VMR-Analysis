@@ -1,26 +1,51 @@
 ######## FUNCTIONS ########
-#### Function: Read excel/csv Files Smartly #### 
+#### Function: Read excel/csv Files Smartly ####
 read_smart_file <- function(file_path)
 {
-  data <- tryCatch( #use "tryCatch" to handle warnings and errors 
+  ext <- tolower(tools::file_ext(file_path)) #get the file extension
+  #a function to dynamic read based on the extension
+  read_text_dynamically <- function(path) {
+
+      # First, try it out
+      # Attempt 1: True CSV
+      data <- try(read.csv(path, header = TRUE, stringsAsFactors = FALSE), silent = TRUE)
+      if (!inherits(data, "try-error") && ncol(data) > 1) return(data)
+
+      # Attempt 2: Standard TSV
+      data <- try(read.delim(path, header = TRUE, sep = "\t", stringsAsFactors = FALSE), silent = TRUE)
+      if (!inherits(data, "try-error") && ncol(data) > 1) return(data)
+
+      # Attempt 3: Legacy Imposter (Tab-separated, UTF-16LE encoding)
+      data <- try(read.delim(path, header = TRUE, sep = "\t", fileEncoding = "UTF-16LE", stringsAsFactors = FALSE), silent = TRUE)
+      if (!inherits(data, "try-error") && ncol(data) > 1) return(data)
+
+      # If all 3 fail, alert the user so it doesn't fail silently
+      stop(paste("CRITICAL ERROR: Could not parse text file", basename(path), "- Unknown delimiter or encoding."))
+    }
+
+  # Second, actually read the file
+  if (ext == "csv") {
+    return(read_text_dynamically(file_path)) #read csv
+  }
+  data <- tryCatch( #use "tryCatch" to handle warnings and errors
   {
-    #first, try with reading the input file as a true Excel file 
+    #first, try with reading the input file as a true Excel file
     df_excel <- read_excel(file_path, col_names = FALSE)
     #if the the data is long truncated with "\t" embedded
     if (ncol(df_excel) == 1)
       {
-      parsed_data <- read.table(text = df_excel[[1]], sep = "\t", header = TRUE) #re-read the data specifying the delimiter 
-      
+      parsed_data <- read.table(text = df_excel[[1]], sep = "\t", header = TRUE) #re-read the data specifying the delimiter
+
       return(parsed_data)
       }
-    #second, read as a normal excel file 
+    #second, read as a normal excel file
     return(read_excel(file_path))
-    
+
   }, error = function(e) #if there is an error, the file is a .csv pretending to be .xlsx
   {
-    #try reading it as csv
-    data <- read.csv(file_path, header = TRUE, sep = "\t", fileEncoding = "UTF-16LE")
-  })  
+    #if excel not working, throw it to dynamic reader
+    return(read_text_dynamically(file_path))
+  })
   return(data)
 }
 #### Function: Split the conditions by the 96-well plate layout ####
@@ -44,7 +69,7 @@ prepare_data <- function(file_name) # file_name = the elements of the file name 
   test <- read_smart_file(file_name)
   #treatment names
   xls_name <- tail(strsplit(file_name, "/")[[1]], 1) #get only the EXCEL file name, remove parent directories
-  treatment_names <- strsplit(xls_name, "-")[[1]][2:4] ##parse the condition segement in the file names 
+  treatment_names <- strsplit(xls_name, "-")[[1]][2:4] ##parse the condition segement in the file names
   #parse the condition segement in the file names
   treatment_date <- gsub(".xlsx?", "", paste(strsplit(xls_name, "-")[[1]][5:7], collapse = "-")) #parse the date of the plate
   #split the data by condition
@@ -62,7 +87,7 @@ prepare_data <- function(file_name) # file_name = the elements of the file name 
   #remove the empty conditions
   empty_idx <- which(treatment_names %in% grep("empty",treatment_names,ignore.case=TRUE,value=TRUE)) #get the index of empty conditions in the file names, case-insensitive
   test_conSplit[c(2*empty_idx-1, 2*empty_idx)] <- NULL #remove the elements of emtpy conditions
-  
+
   #check duplicated groups
   unique_group <- unique(names(test_conSplit))
   test_conSplit <- lapply(unique_group, function(n)
@@ -71,7 +96,7 @@ prepare_data <- function(file_name) # file_name = the elements of the file name 
     do.call(rbind, test_conSplit[names(test_conSplit) == n])
   })
   names(test_conSplit) <- unique_group #rename after binding
-  
+
   #rename the "aname" column
   for(i in 1:length(test_conSplit)) #loop through all elements in the list
   {
@@ -79,7 +104,7 @@ prepare_data <- function(file_name) # file_name = the elements of the file name 
     test_conSplit[[i]]$treatment <- strsplit(names(test_conSplit)[i], "_")[[1]][1] #remove the injury label from the "aname" column, create a "treatment column"
     test_conSplit[[i]]$injury <- strsplit(names(test_conSplit)[i], "_")[[1]][2] #add an "injury" column to to specify the injury condition
   }
-  
+
   #parse the columns
   output_col <- c("date", "location", "aname", "treatment", "injury", "start", "end", "inadist", "smldist", "lardist")
   test_conSplit <- lapply(test_conSplit, function(x) x[,output_col])#subset the data frame by the selected columns
@@ -91,7 +116,7 @@ prepare_data <- function(file_name) # file_name = the elements of the file name 
                             return (x)
                           }
   )
-  
+
   return(test_conSplit)
 }
 
@@ -114,15 +139,15 @@ MEAN_STDEV_STEDRR <- function(x.agg, remove_zero = FALSE, remove_outlier = FALSE
   {
     x.agg <- x.agg[x.agg$zero !=0,]
   }
-  
+
   x.agg.summaryStats <- c(mean(x.agg$distance), sd(x.agg$distance), std.error(x.agg$distance)) #calculate the group mean, standard deviation and standard error
   x.agg.summaryStats.df <- as.data.frame(matrix(x.agg.summaryStats, nrow = nrow(x.agg), ncol = length(x.agg.summaryStats), byrow = TRUE)) #convert the summary stats to data frame with the same number of rows as the total distance DF
   colnames(x.agg.summaryStats.df) <- c('MEAN', 'STDEV', 'STDERR') #rename the column names
-  
+
   x.agg <- cbind(x.agg, x.agg.summaryStats.df) #add to the total distance DF
-  
+
   x.agg$outlier <-  abs(x.agg$distance-x.agg$MEAN) > 2*x.agg$STDEV #cut-off for variability, MEAN +/- 2*STDEV; TRUE = outlier
-  
+
   #remove outlier
   if(remove_outlier)
   {
@@ -132,9 +157,9 @@ MEAN_STDEV_STEDRR <- function(x.agg, remove_zero = FALSE, remove_outlier = FALSE
     x.agg.summaryStats.df <- as.data.frame(matrix(x.agg.summaryStats, nrow = nrow(x.agg), ncol = length(x.agg.summaryStats), byrow = TRUE)) #convert the summary stats to data frame with the same number of rows as the total distance DF
     colnames(x.agg.summaryStats.df) <- c('MEAN', 'STDEV', 'STDERR') #rename the column names
     x.agg[,10:12] <- x.agg.summaryStats.df #replace the old summary stats
-    
+
   }
-  
+
   x.agg$remove_zero <- rep(remove_zero, nrow(x.agg)) #add a column to flag if zeros are removed
   x.agg$remove_outlier <- rep(remove_outlier, nrow(x.agg))
   return(x.agg)
@@ -144,33 +169,33 @@ MEAN_STDEV_STEDRR <- function(x.agg, remove_zero = FALSE, remove_outlier = FALSE
 stat_tests <- function(x, remove_outlier = FALSE, out)
 {
   file_ext <- "" #place holder for no clean
-  
+
   if(remove_outlier) #if remove_outlier == TRUE, subset the data by outlier
   {
     x <- x[x$outlier == FALSE,]
     file_ext <- "_CLEAN"
   }
-  
+
   x_list <- split(x, f = as.factor(x$aname))
   shapiro_list <- lapply(x_list, function(y) as.data.frame(shapiro_test(y$distance)[,2:3])) #shapiro-wilk test on normality for each group of data
   shapiro_df <- do.call('rbind', shapiro_list) #bind all dfs by rows
   shapiro_df$normality <- shapiro_df$p.value > 0.05 #call for normality by passing p-value cut-off of 0.05
   output_file <- paste(out, unique(x$date), "_shapiro_wilk_normality_", unique(x$start), "_", unique(x$end), file_ext, ".csv", sep = "") #specify the output file name
   write.csv(shapiro_df, output_file, quote = FALSE, row.names = TRUE) #write the resutl to a file #keep the row.names arugment TRUE to specify the name of the group name
-  
+
   x.ttest <- t_test(x, formula = distance~aname, p.adjust.method = "fdr") #t-test, p value adjusted by FDR
-  
+
   output_file <- paste(out, unique(x$date), "_stats_tTest_cumulative_distance_", unique(x$start), "_", unique(x$end), file_ext, ".csv", sep = "") #specify the output file name
   write.csv(x.ttest, output_file, quote = FALSE, row.names = FALSE) #save the t-test result to a csv file
-  
+
   x.anova <- aov(x, formula = distance~aname) #ANOVA
   output_file <- paste(out, unique(x$date), "_stats_ANOVA_cumulative_distance_", unique(x$start), "_", unique(x$end), file_ext, ".txt", sep = "") #specify the output file name
   writeLines(capture.output(summary(x.anova)), output_file) #capture the summary result
-  
+
   x.Tukey <- tukey_hsd(x.anova) #post-hoc Tukey HSD
   output_file <- paste(out, unique(x$date), "_stats_TukeyHSD_cumulative_distance", unique(x$start), "_", unique(x$end), file_ext, ".csv", sep = "") #specify the output file name
   write.csv(x.Tukey, output_file, quote = FALSE, row.names = FALSE) #save the TukeyHSD to a csv file
-  
+
   return(list(x.ttest, x.anova, x.Tukey))
 }
 
@@ -178,27 +203,27 @@ stat_tests <- function(x, remove_outlier = FALSE, out)
 bar_box_plots <- function(x, remove_outlier = FALSE, out) #a function to wrap ggplot functions; x = input data frame, as one of the cumulative distance data frame
 {
   file_ext <- "" #place holder for no clean
-  
+
   if(remove_outlier) #if remove_outlier == TRUE, subset the data by outlier
   {
     x <- x[x$outlier == FALSE,]
     file_ext <- "_CLEAN"
   }
-  
+
   x$aname <- factor(x$aname, levels = c(neg_ctrl, setdiff(names(first_list), neg_ctrl)))#reorder the labels
   x$treatment <- factor(x$treatment, levels = c("DMSO", setdiff(unique(x$treatment), "DMSO")))#reorder the labels
   x$injury <- factor(x$injury, levels = c("U", "I"))
-  
+
   ####### bar #######
   bar_input <- x[,c('date', 'aname', 'treatment','injury','MEAN', 'STDEV', 'STDERR', 'start', 'end')] #subset relevent columns for bar chart
   bar_input <- aggregate(cbind(MEAN, STDEV, STDERR)~date+aname+treatment+injury+start+end, bar_input, unique) #get the group MEAN, STDEV and STDERR, use as input
-  
+
   bar_title <- paste("Time Period: (", bar_input$start, " s - ", bar_input$end, " s)", sep = "") #specify the title for the barchart
-  
+
   bar_y_range <- c(0, ifelse(unique(x$end) - unique(x$start) == 599, 150, 1)) # y min = 0; y max = 1 for 5 secs, but = 60 for 10 minutes
   bar_file <- paste(out, unique(x$date), "_cumulateive_distance_BarChart_", unique(x$start), "_", unique(x$end), file_ext, ".pdf", sep = "") #specify the file name
-  
-  
+
+
   #ggplot object for barchart
   bar_chart <- ggplot(bar_input, aes(x = treatment, y = MEAN, fill = injury), group = 1) + #x, y and fill color by injury groups
     geom_bar(stat = "identity", position = position_dodge()) + #plot as bar chart
@@ -207,7 +232,7 @@ bar_box_plots <- function(x, remove_outlier = FALSE, out) #a function to wrap gg
     coord_cartesian(ylim = bar_y_range, expand = FALSE, clip = "off") + #specify the range of y-axis
     labs(title = bar_title, #add plot title
          x = NULL, #remove the x-axis title
-         y = "Average Cumulative Distance (cm)") + #add the y-axis title 
+         y = "Average Cumulative Distance (cm)") + #add the y-axis title
     theme(plot.title = element_text(hjust = 0.5), #center the title
           axis.text.x = element_text(color="#000000", size = 10), #font color and size for the x-axis text
           axis.text.y = element_text(color="#000000", size = 10), #font color and size for the y-axis text
@@ -218,15 +243,15 @@ bar_box_plots <- function(x, remove_outlier = FALSE, out) #a function to wrap gg
           axis.title.y = element_text(size = 15), #font size for the y-axis title
           plot.margin = unit(c(0.5, 1, 0.5, 1.5), "cm")) + #add plot margin on the page, avoid element fall off the page
     scale_x_discrete(guide = guide_axis(n.dodge = 2)) #add dodge to the x-axis test, avoid overlap
-  
+
   pdf(bar_file) #create and open the pdf file
   plot(bar_chart) #plot the bar chart in this opend pdf file
   dev.off() #close the file
-  
+
   ####### box #######
   box_y_range <- c(0, ifelse(unique(x$end) - unique(x$start) == 599, 200, 2)) # y min = 0; y max = 1 for 5 secs, but = 60 for 10 minutes
   box_file <- paste(out, unique(x$date), "_cumulateive_distance_BoxPlot_", unique(x$start), "_", unique(x$end), file_ext, ".pdf", sep = "") #specify the file name
-  
+
   #box plot
   box_chart <- ggplot(x, aes_string(x = 'treatment', y = 'distance', fill = 'injury')) +
     geom_boxplot(outlier.shape=NA) + #remove the outlier from the boxplot, to avoid overlap with dot plot
@@ -235,7 +260,7 @@ bar_box_plots <- function(x, remove_outlier = FALSE, out) #a function to wrap gg
     coord_cartesian(ylim = box_y_range, expand = FALSE, clip = "off") + #specify the range of y-axis
     labs(title = bar_title, #add plot title
          x = NULL, #remove the x-axis title
-         y = "Average Cumulative Distance (cm)") + #add the y-axis title 
+         y = "Average Cumulative Distance (cm)") + #add the y-axis title
     theme(plot.title = element_text(hjust = 0.5), #center the title
           axis.text.x = element_text(color="#000000", size = 10), #font color and size for the x-axis text
           axis.text.y = element_text(color="#000000", size = 10), #font color and size for the y-axis text
@@ -246,12 +271,12 @@ bar_box_plots <- function(x, remove_outlier = FALSE, out) #a function to wrap gg
           axis.title.y = element_text(size = 15), #font size for the y-axis title
           plot.margin = unit(c(0.5, 1, 0.5, 1.5), "cm")) + #add plot margin on the page, avoid element fall off the page
     scale_x_discrete(guide = guide_axis(n.dodge = 2)) #add dodge to the x-axis test, avoid overlap
-  
- 
+
+
   pdf(box_file) #create and open the pdf file
   plot(box_chart) #plot in this opened pdf file
   dev.off() #close the file
-  
+
   return(list(bar_chart, box_chart)) #return to a list of ggplot objects, in case needed later
 }
 
@@ -269,17 +294,26 @@ library(readxl) #read excel file (for special cases)
 #time point for analysis
 #source("./input_output_parameters.R")
 
-out_dir_1 <- paste0(out_dir, "output_", format(Sys.time(), "%Y-%m-%d_%H-%M-%Z"), "/") #use system time as 
+out_dir_1 <- paste0(out_dir, "output_", format(Sys.time(), "%Y-%m-%d_%H-%M-%Z"), "/") #use system time as
 light_on_dir <- paste(out_dir_1, "/light-on/", sep = "") #output dir for light-on results
 light_off_dir <- paste(out_dir_1, "/light-off/", sep = "") #output dir for light-off results
 #check if output directory is ready, if not create the subdirectories for output
-dir.create(light_on_dir, recursive = TRUE) 
-dir.create(light_off_dir, recursive = TRUE) 
+dir.create(light_on_dir, recursive = TRUE)
+dir.create(light_off_dir, recursive = TRUE)
 
 
 ######## Read Data and Preprocess ########
 #read the file names in the working directory
-file_list <- list.files(input_dir, pattern = "*.xls", full.names = TRUE) #a vector of file names
+file_list <- list.files(input_dir, pattern = "\\.(csv|xlsx?)$", full.names = TRUE) #a vector of file names, reading csv, xls or xlsx files as input
+base_names <- tools::file_path_sans_ext(basename(file_list)) #extract the base name
+#throw an error if the folder has more than one file format for the same base name
+if(any(duplicated(base_names))) {
+  duplicated_files <- unique(base_names[duplicated(base_names)])
+  stop(paste("\nCRITICAL ERROR: Multiple file formats found for the same dataset.\n",
+             "Please keep ONLY ONE format (.csv preferred) per plate in the folder.\n",
+             "Conflicting files:", paste(duplicated_files, collapse = ", ")))
+}
+
 first_list <- unlist(lapply(file_list, prepare_data), recursive = FALSE) #return to a list, where each element is a data frame of a treatment condition
 
 #calculate cumulative distance, flag for zeros and calculate simple stats
@@ -288,25 +322,25 @@ full_list <- lapply(first_list, function(x)
   #light on
   y1 <- cumulative_distance(x, light_seg_on) #cumulative distance for light on
   zero_on_idx <- which(y1$distance == 0)#get the index for rows that have 0 distance
-  
+
   #light off
   y2 <- cumulative_distance(x, light_seg_off) #cumulative distance for light off
   zero_off_idx <- which(y2$distance == 0)#get the index for rows that have 0 distance
-  
+
   zero_idx <- intersect(zero_on_idx, zero_off_idx) #find sample that have 0 in both conditions
-  #change the zero status to 0 
+  #change the zero status to 0
   if(length(zero_idx) != 0)
   {
     y1[zero_idx,]$zero <- 0 #light on
     y2[zero_idx,]$zero <- 0 #light off
   }
-  
+
   #calcualte the MEAN, STDEV, STDERR and flag outliers
   y1 <- MEAN_STDEV_STEDRR(y1, remove_zero = remove_zero_flag, remove_outlier = on_clean)
   y2 <- MEAN_STDEV_STEDRR(y2, remove_zero = remove_zero_flag, remove_outlier = off_clean)
-  
+
   return(rbind (y1,y2))
-  
+
 })
 
 #conver the list to data frame
